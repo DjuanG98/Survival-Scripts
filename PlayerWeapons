@@ -1,0 +1,662 @@
+namespace Assets.Scripts.Player
+{
+    using System.Collections;
+    using System.Collections.Generic;
+    using UnityEngine;
+    using EmeraldAI;
+    using Opsive.UltimateInventorySystem;
+    using Opsive.UltimateInventorySystem.Core.AttributeSystem;
+    using Opsive.UltimateInventorySystem.Core;
+    using GPUInstancer;
+    using Assets.Scripts;
+    using UnityEngine.InputSystem;
+    using UnityEngine.Animations.Rigging;
+    using Opsive.UltimateInventorySystem.Core.InventoryCollections;
+    using Assets.Scripts.UI;
+    using Assets.Scripts.Weapons;
+    using Assets.Scripts.Game;
+    using Assets.Scripts.Game.GameInputSystem;
+    using Opsive.UltimateInventorySystem.Core.DataStructures;
+    using Unity.VisualScripting;
+
+    public class PlayerWeapons : MonoBehaviour
+    {
+        public static PlayerWeapons GetPlayerWeapons { get; private set; }
+
+        [Header("Character Hands")]
+        public GameObject rightHand;
+        public GameObject leftHand;
+        private GameObject itemInRightHand;
+        private GameObject itemInLeftHand;
+
+        [Header("Attack Params")]
+        public int handsDamageAmount;
+        public int maxAttempts = 10;
+        public float Reach;
+        private int weaponDamageAmount;
+        private int attackInt;
+        private bool canAttack;
+        private int toolID;
+        private int weaponID;
+
+        [Header("Tree Damage")]
+        public GameObject felledTree;
+        public GameObject stump;
+        private int lastAttack;
+
+        [Header("Shooting")]
+        [SerializeField] private Rig aimRig;
+        public GameObject bullet;
+        private float aimRigWeight;
+        public float bulletSpeed;
+        private int reloadTime;
+        private int range;
+        private int capacity;
+        public int bulletsRemaining;
+        private bool isAiming;
+        private int amountInInventory;
+        private bool canFire;
+
+        [Header("Misc")]
+        public AudioSource audioSource;
+        public AudioClip gunShot;
+        public AudioClip reload;
+        public AudioClip noAmmo;
+        public AudioClip axeChop;
+        public AudioClip punch;
+        public bool hasItem;
+        public bool isWeapon;
+        public bool isTool;
+        bool isGun;
+        public bool isAvailable = true;
+        public float coolDownDuration;
+
+        RaycastHit raycastHit;
+        Ray ray;
+        Vector3 chamberPosition;
+        Animator m_Animator;
+        FPSAnimationController fpsAnimation;
+        //private PlayerInput playerInput;
+        private AcclimateInputSystem InputActions;
+        private bool isPlaying;
+        private RaycastHit hit;
+        Inventory inventory;
+        ItemDefinition item;
+        private GameObject reference;
+        private Sprite sprite;
+        Rigidbody rigidbody;
+        bool rightHandEquipped;
+        bool leftHandEquipped;
+
+        //public float offset = 0;
+        //public bool onlyRemoveSelectedPrototypes = false;
+        //public GPUInstancerManager[] instancerManager;
+        //public List<GPUInstancerPrototype> selectedPrototypes;
+
+        // Start is called before the first frame update
+        void Awake()
+        {
+            GetPlayerWeapons = this;
+
+            InputActions = AcclimateInputManager.inputActions;
+
+
+            InputActions.Gameplay.Fire.performed += _ => Fire_performed();
+            InputActions.Gameplay.Reload.performed += _ => Reload_performed();
+            InputActions.Gameplay.Enable();
+            // = GetComponent<PlayerInput>();
+            //playerInput.actions["Fire"].performed += Fire_performed;
+            //playerInput.actions["Reload"].performed += Reload_performed; 
+        }
+
+        private void Start()
+        {
+            isAiming = false;
+            fpsAnimation = GetComponent<FPSAnimationController>();
+            m_Animator = gameObject.GetComponent<Animator>();
+            bulletsRemaining = -1;
+            canAttack = true;
+            canFire = true;
+
+            reference = GameObject.FindGameObjectWithTag("Player");
+            inventory = reference.GetComponent<Inventory>();
+            audioSource = Sounds.GetSounds.soundEffects;
+        }
+
+        private void OnEnable()
+        {
+            
+        }
+
+        private void OnDisable()
+        {
+            //InputActions.Gameplay.Disable();
+        }
+
+        void ItemInRightHand(bool HasItem)
+        {
+            if (HasItem)
+            {
+                GameObject itemInRightHand2 = rightHand.transform.GetChild(0).gameObject;
+                if (itemInRightHand != null && itemInRightHand.name == itemInRightHand2.name) return;
+                else itemInRightHand = itemInRightHand2;
+                GetDamageAmount(itemInRightHand);
+
+                isWeapon = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<bool>>("IsWeapon").GetValue();
+                if (isWeapon)
+                    isGun = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<bool>>("IsGun").GetValue();
+                else isGun = false;
+
+                isTool = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<bool>>("IsTool").GetValue();
+                
+                ToolInfo();
+                
+                WeaponInfo();
+            }
+            else
+                itemInRightHand = null;
+        }
+
+        void ItemInLeftHand(bool HasItem)
+        {
+            if (HasItem)
+            {
+                if (itemInLeftHand != null) return;
+
+                GameObject itemInLeftHand2 = leftHand.transform.GetChild(0).gameObject;
+
+                if (itemInLeftHand != null && itemInLeftHand.name == itemInLeftHand2.name) return;
+                else itemInLeftHand = itemInLeftHand2;
+
+                GetDamageAmount(itemInLeftHand);
+
+                isWeapon = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<bool>>("IsWeapon").GetValue();
+                isTool = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<bool>>("IsTool").GetValue();
+                if (isWeapon)
+                    isGun = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<bool>>("IsGun").GetValue();
+                else isGun = false;
+
+                ToolInfo();
+
+                WeaponInfo();
+            }
+            else
+                itemInLeftHand = null;
+        }
+
+        bool RightHandEquipped()
+        {
+            if (rightHand.transform.childCount > 0)
+            {
+                ItemInRightHand(true);
+                rightHandEquipped = true;
+                return true;
+            }
+            else
+            {
+                ItemInRightHand(false);
+                rightHandEquipped = false;
+                return false;
+            }
+        }
+
+        bool LeftHandEquipped()
+        {
+            if (leftHand.transform.childCount > 0)
+            {
+                ItemInLeftHand(true);
+                leftHandEquipped = true;
+                return true;
+            }
+            else
+            {
+                ItemInLeftHand(false);
+                leftHandEquipped = false;
+                return false;
+            }
+        }
+        public int ExternalToolID()
+        {
+            return toolID;
+        }
+
+        public int ExternalWeaponID()
+        {
+            return weaponID;
+        }
+
+        public IEnumerator CoolDown()
+        {
+            isAvailable = false;
+            yield return new WaitForSeconds(coolDownDuration);
+            isAvailable = true;
+        }
+
+        public void SetGunSpecs(GameObject ItemInHand)
+        {
+            string GunName = ItemInHand.GetComponent<ItemObject>().ItemInfo.Item.name;
+
+            var items = InventorySystemManager.GetItemDefinition(GunName);
+
+            if (items == null) return;
+
+            //isGun = true;
+
+            reloadTime = items.GetAttribute<Attribute<int>>("Reload Time").GetValue();
+
+            range = items.GetAttribute<Attribute<int>>("Range").GetValue();
+
+            capacity = items.GetAttribute<Attribute<int>>("Capacity").GetValue();
+        }
+
+        public void SetBulletSpecs(string ItemName)
+        {
+            var items = InventorySystemManager.GetItemDefinition(ItemName);
+
+            if (items == null) return;
+
+            item = items;
+
+            InInventory(items);
+
+            bullet = items.GetAttribute<Attribute<GameObject>>("UsableItemPrefab").GetValue();
+
+            sprite = items.GetAttribute<Attribute<Sprite>>("Icon").GetValue();
+
+            if (bulletsRemaining == -1)
+            {
+                Reload();
+            }
+        }
+
+        public void InInventory(ItemDefinition item)
+        {
+            var itemCollection = inventory.GetItemCollection("Player Inventory");
+            var retrievedItemInfoResult = itemCollection.GetItemInfo(item);
+
+            if (retrievedItemInfoResult.HasValue == false)
+            {
+                hasItem = false;
+            }
+            else
+            {
+                hasItem = true;
+                amountInInventory = itemCollection.GetItemAmount(item, true);
+            }
+        }
+
+        public void RemoveFromInventory(ItemDefinition itemToRemove)
+        {
+            var itemCollection = inventory.GetItemCollection("Player Inventory");
+
+            itemCollection.RemoveItem(itemToRemove, 1);
+        }
+        public void GetDamageAmount(GameObject item)
+        {
+            if (item.GetComponent<ItemObject>().Item.TryGetAttributeValue<int>("BaseAttack", out int damage))
+            {
+                weaponDamageAmount = damage;
+            }
+
+            else
+            {
+                weaponDamageAmount = 0;
+            }
+        }
+
+        public void ToolInfo()
+        {
+            if (isTool && itemInRightHand.GetComponent<ItemObject>().Item.TryGetAttributeValue<int>("ToolId", out int ToolID))
+            {
+                toolID = ToolID;
+                coolDownDuration = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<int>>("CoolDownTime").GetValue();
+                weaponID = 0;
+            }
+            else
+                toolID = 0;
+        }
+        public void GetBulletType()
+        {
+            if (itemInRightHand.GetComponent<ItemObject>().Item.TryGetAttributeValue<GameObject>("BulletId", out GameObject Reference))
+            {
+                SetBulletSpecs(Reference.name);
+
+                chamberPosition = Gun_Values.GetGun_Values.ChamberPosition();
+            }
+            else
+            {
+                bullet = null;
+                //isGun = false;
+            }
+        }
+        public void WeaponInfo()
+        {
+
+            if (isWeapon && itemInRightHand.GetComponent<ItemObject>().Item.TryGetAttributeValue<int>("WeaponId", out int WeaponID))
+            {
+                weaponID = WeaponID;
+                toolID = 0;
+                coolDownDuration = itemInRightHand.GetComponent<ItemObject>().Item.GetAttribute<Attribute<int>>("CoolDownTime").GetValue();
+
+                if (isGun == false) return;
+                SetGunSpecs(itemInRightHand);
+                GetBulletType();
+            }
+            else
+                weaponID = 0;
+        }
+
+        public void isNotAttacking()
+        {
+            if (m_Animator.GetBool("IsAttacking") == false)
+            {
+                canAttack = true;
+                m_Animator.ResetTrigger("AttackTrigger");
+            }
+        } 
+
+        public void TreeChop(int damage)
+        {
+            Health health = raycastHit.transform.GetComponent<Health>();
+            int currHealth = health.CurrHealth();
+
+            if (currHealth > damage)
+            {
+                health.DealDamage(damage);
+                m_Animator.SetTrigger("AttackTrigger");
+                canAttack = false;
+                m_Animator.SetInteger("Attack", 3);
+            }
+  
+        }
+
+        public void RemoveTree()
+        {
+            if (Physics.Raycast(ray, out hit, 30f))
+            {
+                DestroyableTree tree = hit.collider.gameObject.GetComponent<DestroyableTree>();
+
+                if (tree == null)
+                    return;
+
+                tree.Delete(felledTree, stump);
+            }
+        }
+
+        public void Shooting(int weaponDamageAmount, float range)
+        {
+
+            switch (weaponID)
+            {
+                case 3:
+                    if (isAiming && !isPlaying)
+                    {
+                        m_Animator.SetBool("isAiming", true);
+
+                        isPlaying = true;
+                    }
+                    else if (!isAiming && isPlaying)
+                    {
+                        m_Animator.SetBool("isAiming", false);
+                        isPlaying = false;
+                    }
+                    break;
+            }
+        }
+
+        IEnumerator Reload(float TimeToReload)
+        {
+            yield return new WaitForSeconds(TimeToReload);
+            audioSource.PlayOneShot(reload);
+            canFire = true;
+        }
+
+        public void Reload()
+        {
+            if (bulletsRemaining <= 0)
+            {
+                if (amountInInventory >= bulletsRemaining)
+                {
+                    canFire = false;
+
+                    StartCoroutine(Reload(reloadTime));
+
+                    if (amountInInventory >= capacity)
+                    {
+                        bulletsRemaining = capacity;
+                    }
+                    else
+                    {
+                        bulletsRemaining = amountInInventory;
+
+                    }
+                }
+                else
+                {
+                    Notifications.GetNotificationMenu.CallNotification("You do not have enough ammo left", sprite);
+                }
+            }
+        }
+
+        public void FireGun(int WeaponDamageAmount)
+        {
+            if (hasItem && bulletsRemaining > 0)
+            {
+                audioSource.PlayOneShot(gunShot);
+                GameObject bulletGameObject = Instantiate(bullet, chamberPosition, Quaternion.LookRotation(Gun_Values.GetGun_Values.ChamberPos.transform.up));
+                Rigidbody bulletObject = bulletGameObject.GetComponent<Rigidbody>();
+                Bullet_Damage.GetBullet_Damage.initialPosition = chamberPosition;
+                Bullet_Damage.GetBullet_Damage.Fire(bulletSpeed, bulletObject, WeaponDamageAmount, range);
+                bulletsRemaining--;
+                RemoveFromInventory(item);
+            }
+            else
+            {
+                audioSource.PlayOneShot(noAmmo);
+                Notifications.GetNotificationMenu.CallNotification("You are out of ammo", sprite);
+            }
+        }
+
+        private int RandomAttack()
+        {
+            int randomAttack;
+
+            randomAttack = Random.Range(1, 3);
+            if (randomAttack == lastAttack)
+            {
+                randomAttack = Random.Range(1, 3);
+            }
+            lastAttack = randomAttack;
+
+            return randomAttack;
+        }
+
+        public void Damage(int weaponDamageAmount, float reach, bool rEquipped, bool lEquipped)
+        {
+
+            ray = Camera.main.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0));
+
+            if (Physics.Raycast(ray, out raycastHit, reach))
+            {
+
+                string tag = raycastHit.transform.tag;
+
+                switch (tag)
+                {
+                    case "Zombies":
+                        if (raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>() != null)
+                        {
+                            switch (weaponID)
+                            {
+                                case 0:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    m_Animator.SetInteger("Attack", RandomAttack());
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(handsDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                case 1:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(weaponDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                case 2:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    m_Animator.SetInteger("Attack", 4);
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(weaponDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        break;
+                    case "Enemy Animals":
+                        if (raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>() != null)
+                        {
+                            switch (weaponID)
+                            {
+                                case 0:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    m_Animator.SetInteger("Attack", RandomAttack());
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(handsDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                case 1:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(weaponDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                case 2:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    m_Animator.SetInteger("Attack", 4);
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(weaponDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        break;
+                    case "Animals":
+                        if (raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>() != null)
+                        {
+                            switch (weaponID)
+                            {
+                                case 0:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    m_Animator.SetInteger("Attack", RandomAttack());
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(handsDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                case 1:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(weaponDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                case 2:
+                                    m_Animator.SetTrigger("AttackTrigger");
+                                    m_Animator.SetInteger("Attack", 4);
+                                    raycastHit.transform.GetComponent<EmeraldAI.EmeraldAISystem>().Damage(weaponDamageAmount, EmeraldAI.EmeraldAISystem.TargetType.Player, transform, 400);
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        break;
+                    case "Tree":
+                        switch (weaponID)
+                        {
+                            case 0:
+                                m_Animator.SetTrigger("AttackTrigger");
+                                TreeChop(handsDamageAmount);
+                                break;
+                            case 1:
+                                if (isAvailable)
+                                {
+                                    TreeChop(weaponDamageAmount);
+                                    StartCoroutine(CoolDown());
+                                }
+                                else
+                                    return;
+                                break;
+                            default:
+                                break;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        public void Remove()
+        {
+            Destroy(gameObject);
+        }
+
+        public void EnableDisableCollider()
+        {
+            MeshCollider meshCollider = itemInRightHand.GetComponent<MeshCollider>();
+            if (!meshCollider.enabled)
+            {
+                meshCollider.enabled = true;
+            }
+            if (meshCollider.enabled)
+            {
+                meshCollider.enabled = false;
+            }
+        }
+
+        private void FixedUpdate()
+        {
+            RightHandEquipped();
+            LeftHandEquipped();
+
+            if (InputActions.Gameplay.Aim.IsPressed())
+            {
+                if (rightHandEquipped | leftHandEquipped)
+                {
+                    isAiming = true;
+                    m_Animator.SetInteger("Attack", 0);
+                    aimRigWeight = 1f;
+                }
+            }
+            else
+            {
+                isAiming = false;
+                aimRigWeight = 0f;
+            }
+
+            if (rightHandEquipped && weaponID > 2 | leftHandEquipped && weaponID > 2)
+                Shooting(weaponDamageAmount, range);
+
+            if (isAiming)
+                aimRig.weight = Mathf.Lerp(aimRig.weight, aimRigWeight, Time.fixedDeltaTime * 20f);
+            else
+                aimRig.weight = Mathf.Lerp(aimRig.weight, aimRigWeight, Time.fixedDeltaTime * 20f);
+        }
+
+        private void Fire_performed()
+        {
+            if (GameController.GetGameController.overlayActive == false)
+            {
+
+                if (!leftHandEquipped && !rightHandEquipped)
+                {
+                    Damage(handsDamageAmount, Reach, false, false);
+
+                }
+
+                else if (rightHandEquipped | leftHandEquipped)
+                {
+                    if (isGun && canFire && isAiming)
+                        FireGun(weaponDamageAmount);
+                    else
+                        Damage(weaponDamageAmount, Reach, rightHandEquipped, leftHandEquipped);
+
+
+                }
+            }
+        }
+
+        private void Reload_performed()
+        {
+            if (isGun)
+            {
+                Reload();
+            }
+        }
+    }
+}

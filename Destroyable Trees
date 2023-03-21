@@ -1,0 +1,141 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using System;
+using Assets.Scripts;
+using VisualDesignCafe.Rendering.Nature;
+using Assets.Scripts.Game.CommonFunctions;
+using System.Linq;
+using Assets.Scripts.Game.SaveLoad;
+using UnityEngine.Windows;
+using UnityEngine.Timeline;
+
+public class ChopTree : MonoBehaviour
+{
+    public static ChopTree GetChopTree { get; private set; }
+    [SerializeField] private Terrain terrain;
+    private TreeInstance[] _originalTrees;
+    private TreeInstance[] _saveCurrentTrees;
+    private TreeInstance[] _loadCurrentTrees;
+    private TreeInstance[] cutTrees;
+    private List<GameObject> _stumps = new List<GameObject>();
+    private Vector3[] _loadStumps;
+    private List<Vector3> stumpPos = new List<Vector3>();
+    [SerializeField] private int myIndex;
+    [SerializeField] private int TreeHealth;
+    public int trees;
+    public GameObject Stump;
+    private void Awake()
+    {
+        GetChopTree = this;
+        terrain = gameObject.GetComponent<Terrain>();
+
+        _originalTrees = terrain.terrainData.treeInstances;
+
+        //LoadTerrainData();
+    }
+
+    void CutTrees(Terrain terrainVal, TreeInstance[] treeInstances)
+    {
+        if (terrainVal.terrainData.treeInstances.Length == treeInstances.Length)
+        {
+            for (int count = 0; count < cutTrees.Length; count++)
+            {
+                if (cutTrees[count].prototypeIndex < 5)
+                {
+
+                    GameObject capsule = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+                    capsule.name = terrain.name + "_" + count;
+                    CapsuleCollider capsuleCollider = capsule.GetComponent<CapsuleCollider>() as CapsuleCollider;
+                    capsuleCollider.center = new Vector3(0, 4, 0);
+                    capsuleCollider.height = 10;
+                    capsuleCollider.radius = 1f;
+                    DestroyableTree tree = capsule.AddComponent<DestroyableTree>();
+                    capsule.AddComponent<Health>();
+                    tree.terrain = terrain;
+                    tree.terrainIndex = count;
+                    Vector3 tileDimensions = new Vector3(terrain.terrainData.size.x, 0, terrain.terrainData.size.z);
+                    Vector3 tilePosition = new Vector3(gameObject.transform.position.x + (tileDimensions.x * 0f), 0, gameObject.transform.position.z + (tileDimensions.z * 0f));
+                    Vector3 pos = Vector3.Scale(terrain.terrainData.GetTreeInstance(count).position, terrain.terrainData.size);
+                    capsule.transform.position = pos + tilePosition;
+                    capsule.tag = "Tree";
+                    capsule.isStatic = true;
+                    capsule.transform.parent = terrain.transform;
+                    capsule.GetComponent<Renderer>().enabled = false;
+                    capsule.hideFlags = HideFlags.HideInHierarchy;
+                    myIndex = count;
+                }
+            }
+        }
+    }
+
+    public void FirstTimeLoad()
+    {
+        cutTrees = new TreeInstance[terrain.terrainData.treeInstances.Length];
+        Array.Copy(terrain.terrainData.treeInstances, cutTrees, terrain.terrainData.treeInstances.Length);
+        CutTrees(terrain, cutTrees);
+    }
+
+    public void AddStump(GameObject stump, Terrain SaveTerrain)
+    {
+        SaveTerrain.gameObject.GetComponent<ChopTree>()._stumps.Add(stump);
+    }
+
+    public void SaveStumps(Terrain TerrainSave)
+    {
+        string pathname = "/AcclimateTerrainData_Stumps" + terrain.name + ".txt";
+        foreach (GameObject stump in TerrainSave.gameObject.GetComponent<ChopTree>()._stumps)
+        {
+            stumpPos.Add(stump.transform.position);
+        }
+        Functions.Serialize(stumpPos, pathname);
+    }
+
+    public void SaveTerrainData()
+    {
+        string pathname = "/AcclimateTerrainData_" + terrain.name + ".txt";
+        _saveCurrentTrees = terrain.terrainData.treeInstances;
+        Array.Copy(terrain.terrainData.treeInstances, _saveCurrentTrees, terrain.terrainData.treeInstances.Length);
+        List<TreeInstance> newTrees = new List<TreeInstance>(_saveCurrentTrees);
+
+        Functions.Serialize(newTrees, pathname); 
+    } 
+
+    public void LoadTerrainData(Terrain TerrainLoad)
+    {
+        string pathname = "/AcclimateTerrainData_" + TerrainLoad.name + ".txt";
+        if (System.IO.File.Exists(Application.persistentDataPath + pathname))
+        {
+            _loadCurrentTrees = Functions.GenericDeSerialize<TreeInstance>(pathname).ToArray();
+            TerrainLoad.terrainData.SetTreeInstances(_loadCurrentTrees, true);
+            cutTrees = new TreeInstance[terrain.terrainData.treeInstances.Length];
+            Array.Copy(terrain.terrainData.treeInstances, cutTrees, terrain.terrainData.treeInstances.Length);
+
+            CutTrees(TerrainLoad, _loadCurrentTrees);
+        }
+        else
+        {
+            FirstTimeLoad();
+        }
+
+    }
+
+    public void LoadStump(Terrain TerrainLoad)
+    {
+        string pathname = "/AcclimateTerrainData_Stumps" + TerrainLoad.name + ".txt";
+        if (System.IO.File.Exists(Application.persistentDataPath + pathname))
+        {
+            _loadStumps = Functions.GenericDeSerialize<Vector3>(pathname).ToArray();
+            for (int i = 0; i < _loadStumps.Length; i++)
+            {
+                Instantiate(Stump, _loadStumps[i], Quaternion.identity);
+            }
+        }
+    }
+
+    void OnApplicationQuit()
+    {
+        // restore original trees
+        terrain.terrainData.treeInstances = _originalTrees;
+    }
+}
